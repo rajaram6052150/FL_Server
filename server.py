@@ -7,12 +7,12 @@ Flower + PyTorch + Azure ML Integration
 import os
 import flwr as fl
 import torch
+
 from flwr.server.strategy import FedAvg
 from flwr.common import parameters_to_ndarrays
 from typing import List, Tuple
 
 from model import ChurnModel
-from azure_ml import upload_model_to_azure
 
 
 # =========================================================
@@ -28,11 +28,17 @@ os.makedirs("models", exist_ok=True)
 
 class FedAvgCustom(FedAvg):
 
-    def __init__(self, input_size, *args, **kwargs):
+    def __init__(self, input_size, num_rounds, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
 
         self.input_size = input_size
+
+        self.num_rounds = num_rounds
+
+    # =====================================================
+    # AGGREGATE CLIENT MODELS
+    # =====================================================
 
     def aggregate_fit(
         self,
@@ -48,14 +54,21 @@ class FedAvgCustom(FedAvg):
         print(f"Number of clients completed: {len(results)}")
         print(f"Number of clients failed: {len(failures)}")
 
+        # =================================================
+        # PRINT FAILURES
+        # =================================================
+
         if failures:
+
             print("\nFailed Clients:")
+
             for client_id, error in failures:
+
                 print(f"{client_id} -> {error}")
 
-        # =====================================================
-        # AGGREGATE WEIGHTS USING FEDAVG
-        # =====================================================
+        # =================================================
+        # FEDAVG AGGREGATION
+        # =================================================
 
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(
             server_round,
@@ -63,15 +76,15 @@ class FedAvgCustom(FedAvg):
             failures,
         )
 
-        # =====================================================
-        # SAVE GLOBAL MODEL AFTER EACH ROUND
-        # =====================================================
+        # =================================================
+        # SAVE GLOBAL MODEL
+        # =================================================
 
         if aggregated_parameters is not None:
 
             print("\nSaving global model...")
 
-            # Convert Flower parameters -> numpy arrays
+            # Convert Flower params -> numpy arrays
             aggregated_ndarrays = parameters_to_ndarrays(
                 aggregated_parameters
             )
@@ -82,17 +95,28 @@ class FedAvgCustom(FedAvg):
             # Get model state_dict
             state_dict = model.state_dict()
 
-            # Update weights
-            params_dict = zip(state_dict.keys(), aggregated_ndarrays)
+            # Match weights
+            params_dict = zip(
+                state_dict.keys(),
+                aggregated_ndarrays
+            )
 
+            # Convert numpy -> torch tensor
             state_dict = {
                 k: torch.tensor(v)
                 for k, v in params_dict
             }
 
-            model.load_state_dict(state_dict, strict=True)
+            # Load weights
+            model.load_state_dict(
+                state_dict,
+                strict=True
+            )
 
-            # Save round model
+            # =============================================
+            # SAVE ROUND CHECKPOINT
+            # =============================================
+
             round_model_path = (
                 f"models/global_model_round_{server_round}.pth"
             )
@@ -104,15 +128,15 @@ class FedAvgCustom(FedAvg):
 
             print(f"Round model saved: {round_model_path}")
 
-            # =================================================
+            # =============================================
             # SAVE FINAL MODEL
-            # =================================================
+            # =============================================
 
-            FINAL_ROUND = 5
+            if server_round == self.num_rounds:
 
-            if server_round == FINAL_ROUND:
-
-                final_model_path = "models/final_model.pth"
+                final_model_path = (
+                    "models/final_model.pth"
+                )
 
                 torch.save(
                     model.state_dict(),
@@ -124,21 +148,35 @@ class FedAvgCustom(FedAvg):
                 print(f"Location: {final_model_path}")
                 print("=" * 60)
 
-                # =============================================
-                # UPLOAD TO AZURE ML REGISTRY
-                # =============================================
+                # =========================================
+                # IMPORT AZURE SDK ONLY NOW
+                # =========================================
 
                 try:
 
-                    print("\nUploading model to Azure ML Registry...")
+                    print(
+                        "\nLoading Azure ML SDK..."
+                    )
+
+                    from azure_ml import (
+                        upload_model_to_azure
+                    )
+
+                    print(
+                        "Uploading model to Azure ML Registry..."
+                    )
 
                     upload_model_to_azure()
 
-                    print("\nMODEL SUCCESSFULLY UPLOADED!")
+                    print(
+                        "\nMODEL SUCCESSFULLY UPLOADED TO AZURE ML!"
+                    )
 
                 except Exception as e:
 
-                    print("\nAzure ML Upload Failed!")
+                    print(
+                        "\nAzure ML Upload Failed!"
+                    )
 
                     print(e)
 
@@ -146,14 +184,22 @@ class FedAvgCustom(FedAvg):
 
 
 # =========================================================
-# MAIN SERVER FUNCTION
+# MAIN FUNCTION
 # =========================================================
 
 def main():
 
+    # =====================================================
+    # CONFIG
+    # =====================================================
+
     INPUT_SIZE = 6559
 
     NUM_ROUNDS = 5
+
+    # =====================================================
+    # SERVER INFO
+    # =====================================================
 
     print("=" * 60)
     print("Federated Learning Server")
@@ -161,10 +207,15 @@ def main():
     print("=" * 60)
 
     print("Server Configuration:")
+
     print(f"Server Address : 0.0.0.0:8080")
+
     print(f"Federated Rounds : {NUM_ROUNDS}")
+
     print(f"Minimum Clients : 2")
+
     print(f"Input Feature Size : {INPUT_SIZE}")
+
     print("=" * 60)
 
     # =====================================================
@@ -174,6 +225,8 @@ def main():
     strategy = FedAvgCustom(
 
         input_size=INPUT_SIZE,
+
+        num_rounds=NUM_ROUNDS,
 
         fraction_fit=1.0,
 
@@ -212,8 +265,11 @@ def main():
         print(f"\n[SERVER ERROR] {e}")
 
     print("\n" + "=" * 60)
+
     print("Federated Learning Completed!")
+
     print("Final global model saved in models/")
+
     print("=" * 60)
 
 
