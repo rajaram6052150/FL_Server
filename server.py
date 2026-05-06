@@ -1,7 +1,7 @@
 """
 Federated Learning Server
 Telco Customer Churn Prediction
-Flower + PyTorch + Azure ML Integration
+Flower + PyTorch
 """
 
 import os
@@ -16,7 +16,7 @@ from model import ChurnModel
 
 
 # =========================================================
-# CREATE MODELS DIRECTORY
+# CREATE MODEL DIRECTORY
 # =========================================================
 
 os.makedirs("models", exist_ok=True)
@@ -37,7 +37,7 @@ class FedAvgCustom(FedAvg):
         self.num_rounds = num_rounds
 
     # =====================================================
-    # AGGREGATE CLIENT MODELS
+    # AGGREGATE CLIENT WEIGHTS
     # =====================================================
 
     def aggregate_fit(
@@ -51,8 +51,8 @@ class FedAvgCustom(FedAvg):
         print(f"Federated Round {server_round}")
         print("=" * 60)
 
-        print(f"Number of clients completed: {len(results)}")
-        print(f"Number of clients failed: {len(failures)}")
+        print(f"Clients completed : {len(results)}")
+        print(f"Clients failed    : {len(failures)}")
 
         # =================================================
         # PRINT FAILURES
@@ -84,38 +84,38 @@ class FedAvgCustom(FedAvg):
 
             print("\nSaving global model...")
 
-            # Convert Flower params -> numpy arrays
+            # Convert Flower Parameters -> NumPy Arrays
             aggregated_ndarrays = parameters_to_ndarrays(
                 aggregated_parameters
             )
 
-            # Create model
+            # Create model architecture
             model = ChurnModel(self.input_size)
 
-            # Get model state_dict
+            # Get current state_dict
             state_dict = model.state_dict()
 
-            # Match weights
+            # Match keys with parameters
             params_dict = zip(
                 state_dict.keys(),
                 aggregated_ndarrays
             )
 
-            # Convert numpy -> torch tensor
+            # Convert NumPy -> Torch Tensor
             state_dict = {
                 k: torch.tensor(v)
                 for k, v in params_dict
             }
 
-            # Load weights
+            # Load aggregated weights
             model.load_state_dict(
                 state_dict,
                 strict=True
             )
 
-            # =============================================
+            # =================================================
             # SAVE ROUND CHECKPOINT
-            # =============================================
+            # =================================================
 
             round_model_path = (
                 f"models/global_model_round_{server_round}.pth"
@@ -128,9 +128,9 @@ class FedAvgCustom(FedAvg):
 
             print(f"Round model saved: {round_model_path}")
 
-            # =============================================
+            # =================================================
             # SAVE FINAL MODEL
-            # =============================================
+            # =================================================
 
             if server_round == self.num_rounds:
 
@@ -147,38 +147,6 @@ class FedAvgCustom(FedAvg):
                 print("FINAL GLOBAL MODEL SAVED!")
                 print(f"Location: {final_model_path}")
                 print("=" * 60)
-
-                # =========================================
-                # IMPORT AZURE SDK ONLY NOW
-                # =========================================
-
-                try:
-
-                    print(
-                        "\nLoading Azure ML SDK..."
-                    )
-
-                    from azure_ml import (
-                        upload_model_to_azure
-                    )
-
-                    print(
-                        "Uploading model to Azure ML Registry..."
-                    )
-
-                    upload_model_to_azure()
-
-                    print(
-                        "\nMODEL SUCCESSFULLY UPLOADED TO AZURE ML!"
-                    )
-
-                except Exception as e:
-
-                    print(
-                        "\nAzure ML Upload Failed!"
-                    )
-
-                    print(e)
 
         return aggregated_parameters, aggregated_metrics
 
@@ -208,13 +176,13 @@ def main():
 
     print("Server Configuration:")
 
-    print(f"Server Address : 0.0.0.0:8080")
+    print(f"Server Address   : 0.0.0.0:8080")
 
     print(f"Federated Rounds : {NUM_ROUNDS}")
 
-    print(f"Minimum Clients : 2")
+    print(f"Minimum Clients  : 2")
 
-    print(f"Input Feature Size : {INPUT_SIZE}")
+    print(f"Input Size       : {INPUT_SIZE}")
 
     print("=" * 60)
 
@@ -268,7 +236,7 @@ def main():
 
     print("Federated Learning Completed!")
 
-    print("Final global model saved in models/")
+    print("Final model available in models/")
 
     print("=" * 60)
 
