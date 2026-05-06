@@ -1,0 +1,10 @@
+name: federated-env
+
+dependencies:
+  - python=3.12
+  - pip
+
+  - pip:
+      - torch
+      - numpy
+      - azureml-defaults
