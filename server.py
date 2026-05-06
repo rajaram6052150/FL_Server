@@ -1,31 +1,38 @@
 """
 Federated Learning Server
-Coordinates training across clients using Flower Framework
-Aggregates model updates using FedAvg algorithm
+Telco Customer Churn Prediction
+Flower + PyTorch + Azure ML Integration
 """
 
+import os
 import flwr as fl
+import torch
 from flwr.server.strategy import FedAvg
+from flwr.common import parameters_to_ndarrays
 from typing import List, Tuple
 
-from save_model import save_global_model
+from model import ChurnModel
+from azure_ml import upload_model_to_azure
 
 
-# IMPORTANT:
-# Replace this with your actual processed feature count
-# Example:
-# If X_train.shape[1] = 20, then INPUT_SIZE = 20
-INPUT_SIZE = 6559
+# =========================================================
+# CREATE MODELS DIRECTORY
+# =========================================================
 
+os.makedirs("models", exist_ok=True)
+
+
+# =========================================================
+# CUSTOM FEDAVG STRATEGY
+# =========================================================
 
 class FedAvgCustom(FedAvg):
-    """
-    Custom FedAvg strategy with detailed logging
-    """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, input_size, *args, **kwargs):
+
         super().__init__(*args, **kwargs)
-        self.round_num = 0
+
+        self.input_size = input_size
 
     def aggregate_fit(
         self,
@@ -33,52 +40,120 @@ class FedAvgCustom(FedAvg):
         results: List[Tuple],
         failures: List[Tuple],
     ):
-        """
-        Aggregate model weights using FedAvg
-        and save global model after each round
-        """
 
-        print(f"\n{'=' * 60}")
+        print("\n" + "=" * 60)
         print(f"Federated Round {server_round}")
-        print(f"{'=' * 60}")
+        print("=" * 60)
 
         print(f"Number of clients completed: {len(results)}")
         print(f"Number of clients failed: {len(failures)}")
 
-        # Print failures if any
         if failures:
-            print("\nClient Failures:")
+            print("\nFailed Clients:")
             for client_id, error in failures:
-                print(f"Client {client_id} failed: {error}")
+                print(f"{client_id} -> {error}")
 
-        # Perform FedAvg aggregation
+        # =====================================================
+        # AGGREGATE WEIGHTS USING FEDAVG
+        # =====================================================
+
         aggregated_parameters, aggregated_metrics = super().aggregate_fit(
             server_round,
             results,
-            failures
+            failures,
         )
 
-        # Save aggregated global model
+        # =====================================================
+        # SAVE GLOBAL MODEL AFTER EACH ROUND
+        # =====================================================
+
         if aggregated_parameters is not None:
 
-            save_global_model(
-                parameters=aggregated_parameters,
-                round_num=server_round,
-                input_size=INPUT_SIZE
+            print("\nSaving global model...")
+
+            # Convert Flower parameters -> numpy arrays
+            aggregated_ndarrays = parameters_to_ndarrays(
+                aggregated_parameters
             )
 
-        # Print metrics if available
-        if aggregated_metrics:
-            print(f"\nAggregated Metrics:")
-            print(aggregated_metrics)
+            # Create model
+            model = ChurnModel(self.input_size)
 
-        print(f"{'=' * 60}\n")
+            # Get model state_dict
+            state_dict = model.state_dict()
+
+            # Update weights
+            params_dict = zip(state_dict.keys(), aggregated_ndarrays)
+
+            state_dict = {
+                k: torch.tensor(v)
+                for k, v in params_dict
+            }
+
+            model.load_state_dict(state_dict, strict=True)
+
+            # Save round model
+            round_model_path = (
+                f"models/global_model_round_{server_round}.pth"
+            )
+
+            torch.save(
+                model.state_dict(),
+                round_model_path
+            )
+
+            print(f"Round model saved: {round_model_path}")
+
+            # =================================================
+            # SAVE FINAL MODEL
+            # =================================================
+
+            FINAL_ROUND = 5
+
+            if server_round == FINAL_ROUND:
+
+                final_model_path = "models/final_model.pth"
+
+                torch.save(
+                    model.state_dict(),
+                    final_model_path
+                )
+
+                print("\n" + "=" * 60)
+                print("FINAL GLOBAL MODEL SAVED!")
+                print(f"Location: {final_model_path}")
+                print("=" * 60)
+
+                # =============================================
+                # UPLOAD TO AZURE ML REGISTRY
+                # =============================================
+
+                try:
+
+                    print("\nUploading model to Azure ML Registry...")
+
+                    upload_model_to_azure()
+
+                    print("\nMODEL SUCCESSFULLY UPLOADED!")
+
+                except Exception as e:
+
+                    print("\nAzure ML Upload Failed!")
+
+                    print(e)
 
         return aggregated_parameters, aggregated_metrics
 
 
+# =========================================================
+# MAIN SERVER FUNCTION
+# =========================================================
+
 def main():
-    """Start Flower Federated Learning Server"""
+
+    INPUT_SIZE = 6559
+
+    NUM_ROUNDS = 5
 
     print("=" * 60)
     print("Federated Learning Server")
@@ -87,55 +162,53 @@ def main():
 
     print("Server Configuration:")
     print(f"Server Address : 0.0.0.0:8080")
-    print(f"Federated Rounds : 5")
+    print(f"Federated Rounds : {NUM_ROUNDS}")
     print(f"Minimum Clients : 2")
     print(f"Input Feature Size : {INPUT_SIZE}")
-
     print("=" * 60)
 
-    # Define Federated Learning Strategy
+    # =====================================================
+    # FEDAVG STRATEGY
+    # =====================================================
+
     strategy = FedAvgCustom(
 
-        # Use all available clients for training
+        input_size=INPUT_SIZE,
+
         fraction_fit=1.0,
 
-        # Evaluate on all available clients
         fraction_evaluate=1.0,
 
-        # Minimum clients required for training
         min_fit_clients=2,
 
-        # Minimum clients required for evaluation
         min_evaluate_clients=2,
 
-        # Wait until at least 2 clients connect
         min_available_clients=2,
     )
 
-    # Start Flower Server
+    # =====================================================
+    # START FLOWER SERVER
+    # =====================================================
+
     try:
 
         fl.server.start_server(
 
-            # IMPORTANT:
-            # 0.0.0.0 allows external Azure/public access
             server_address="0.0.0.0:8080",
 
-            # Number of federated rounds
             config=fl.server.ServerConfig(
-                num_rounds=5
+                num_rounds=NUM_ROUNDS
             ),
 
             strategy=strategy,
-
-            # Prevent message size issues
-            grpc_max_message_length=1024 * 1024 * 1024,
         )
 
     except KeyboardInterrupt:
-        print("\n[SERVER STOPPED] Interrupted by user")
+
+        print("\nServer interrupted by user")
 
     except Exception as e:
+
         print(f"\n[SERVER ERROR] {e}")
 
     print("\n" + "=" * 60)
@@ -144,5 +217,10 @@ def main():
     print("=" * 60)
 
 
+# =========================================================
+# ENTRY POINT
+# =========================================================
+
 if __name__ == "__main__":
+
     main()
